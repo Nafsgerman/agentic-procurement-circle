@@ -41,3 +41,7 @@ yarn-error.log*
 next-env.d.ts
 .env.local
 recovery/
+register-entity-secret.mts
+check-balance.mts
+check-txns.mts
+get-wallet-id.mts

@@ -21,14 +21,21 @@ export async function runAgent(task: string, rail: PaymentRail): Promise<AgentRu
     model: MODEL,
     max_tokens: 400,
     system:
-      "You are a procurement agent. Given a task and free research, decide if you need to buy a paid data/API resource to finish. Respond ONLY with JSON: " +
-      '{"needsPaidData":boolean,"resource":string,"priceUsd":number,"reason":string}. priceUsd between 0.01 and 1.00.',
+      "You are a procurement agent. Given a task and free research, decide if you need to buy a paid data/API resource to finish. " +
+      "Respond ONLY with JSON: " +
+      '{"needsPaidData":boolean,"resource":string,"supplierName":string,"priceUsd":number,"reason":string}. ' +
+      "CRITICAL: supplierName MUST be the actual name of the single top candidate COMPANY from the research that you want to screen (e.g. \"Monoprice\", \"Texas Instruments\", \"DACHSER\") — NEVER a data provider, report name, or database (never \"Dun & Bradstreet\", \"OpenSanctions\", etc). If no specific company is identifiable, set supplierName to the most likely company name you can infer. priceUsd between 0.01 and 1.00.",
     messages: [{ role: "user", content: `Task: ${task}\n\nFree research:\n${context}` }],
   });
   const decision = safeJson(textOf(decisionMsg));
 
   let payment: PaymentResult | null = null;
-  if (decision.needsPaidData) payment = await rail.pay(decision.priceUsd, decision.resource);
+  if (decision.needsPaidData) {
+    const screenTarget = decision.supplierName && !/dun|bradstreet|opensanctions|dow jones|sayari|kharon|creditsafe|report|database|api/i.test(decision.supplierName)
+      ? decision.supplierName
+      : decision.supplierName || decision.resource;
+    payment = await rail.pay(decision.priceUsd, screenTarget);
+  }
 
   const answerMsg = await anthropic.messages.create({
     model: MODEL,
