@@ -144,19 +144,26 @@ export function circleRail(): PaymentRail {
       }
 
       const settleRes = await fetch(resourceUrl, { headers: { "X-PAYMENT": txId } });
-      const resourceData = settleRes.ok ? await settleRes.json() : null;
       const confirmMs = Math.round(performance.now() - t0);
+
+      let resourceData: any = null;
+      let settleErrorBody: string | null = null;
+      if (settleRes.ok) {
+        resourceData = await settleRes.json();
+      } else {
+        settleErrorBody = await settleRes.text().catch(() => settleRes.statusText);
+      }
 
       return {
         rail: "circle",
-        success: settleRes.ok,
+        success: settleRes.ok && resourceData != null,
         amountUsd,
-        settlementMs: confirmMs, // real time to on-chain confirmation + unlock
-        submitMs,                // time to submit only (tx still INITIATED at this point)
+        settlementMs: confirmMs,
+        submitMs,
         preconditions: [],
         fraudSignal: null,
         reversible: false,
-        reference: txId,
+        reference: settleRes.ok ? txId : `paid-but-unlock-failed (${settleRes.status}): ${settleErrorBody}`,
         resourceData,
       };
     },
