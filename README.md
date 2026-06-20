@@ -44,11 +44,7 @@ flag.
 
 ## Architecture
 
-<<<<<<< HEAD
-[alt text](image.png)
-=======
-<img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/13d740bc-8b4c-40c4-8134-f438d297bca7" />
->>>>>>> 04e07ae4505f0feebc3069bcf80c9445be9ee746
+<img width="1024" height="559" alt="Architecture diagram" src="https://github.com/user-attachments/assets/13d740bc-8b4c-40c4-8134-f438d297bca7" />
 
 - `lib/rails/types.ts` — `PaymentRail` interface (`init`, `pay`) and
   `PaymentResult` type. Designed so additional rails (e.g. Stripe) can
