@@ -3,6 +3,7 @@ export interface PaymentResult {
   success: boolean;
   amountUsd: number;
   settlementMs: number;
+  submitMs?: number;
   preconditions: string[];
   fraudSignal: number | null;
   reversible: boolean;

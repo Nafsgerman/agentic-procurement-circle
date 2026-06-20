@@ -1,26 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyCirclePayment } from "@/lib/rails/circle";
 
 const settled = new Set<string>();
-const PRICE_USD = "0.05";
+const PRICE_USD = process.env.PAID_PRICE_USDC || "0.05";
 const ASSET = "USDC";
 const PAY_TO = process.env.CIRCLE_MERCHANT_ADDRESS || "0x000000000000000000000000000000000000dead";
-const NETWORK = "base-sepolia";
+const NETWORK = process.env.PAID_CHAIN || "ETH-SEPOLIA";
 
 export async function GET(req: NextRequest) {
   const paymentRef = req.headers.get("x-payment");
   const supplierName = req.nextUrl.searchParams.get("supplier") ?? "";
 
+  // No payment yet → return 402 challenge with payment terms.
   if (!paymentRef) {
-    return NextResponse.json({ asset: ASSET, amount: PRICE_USD, payTo: PAY_TO, network: NETWORK }, { status: 402 });
+    return NextResponse.json(
+      { asset: ASSET, amount: PRICE_USD, payTo: PAY_TO, network: NETWORK },
+      { status: 402 }
+    );
   }
-  if (settled.has(paymentRef)) {
-    return NextResponse.json({ error: "payment already redeemed" }, { status: 409 });
-  }
-  settled.add(paymentRef);
 
+  // Cheap guard before the (up to ~24s) on-chain verify, so a malformed request never burns a payment.
   if (!supplierName) {
     return NextResponse.json({ error: "supplier query param required" }, { status: 400 });
   }
+
+  // One-time redemption (anti-replay).
+  if (settled.has(paymentRef)) {
+    return NextResponse.json({ error: "payment already redeemed" }, { status: 409 });
+  }
+
+  // Verify the Circle tx actually settled to us for the right amount/asset/chain BEFORE unlocking.
+  const check = await verifyCirclePayment(paymentRef);
+  if (!check.ok) {
+    return NextResponse.json({ error: check.reason }, { status: check.status });
+  }
+  settled.add(paymentRef); // mark redeemed only after successful verification
 
   try {
     const res = await fetch("https://api.opensanctions.org/match/sanctions", {
@@ -54,6 +68,7 @@ export async function GET(req: NextRequest) {
       sanctionsFlag: Boolean(flagged),
       matchCount: results.length,
       topMatch: topMatch ? { caption: topMatch.caption, score: topMatch.score, id: topMatch.id } : null,
+      paymentTxHash: check.txHash,
       checkedAgainst: "OpenSanctions consolidated sanctions datasets",
       checkedAt: new Date().toISOString(),
     });

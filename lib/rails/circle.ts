@@ -8,6 +8,60 @@ const client = initiateDeveloperControlledWalletsClient({
   entitySecret: process.env.CIRCLE_ENTITY_SECRET!,
 });
 
+// ---- payment verification (gate) ----
+// In-block = paid. Accepting CONFIRMED (not just COMPLETE) is a deliberate demo choice:
+// a tx in a block has settled for paywall purposes. Set ACCEPTED_STATES to COMPLETE-only for strict finality.
+const ACCEPTED_STATES = new Set(["COMPLETE", "CONFIRMED"]);
+const TERMINAL_FAIL = new Set(["FAILED", "DENIED", "CANCELLED"]);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export type PaymentCheck =
+  | { ok: true; txHash: string; amount: string; state: string }
+  | { ok: false; status: number; reason: string };
+
+/**
+ * Verifies a Circle transaction actually settled to the merchant for the right
+ * amount/asset/chain before any data is unlocked. Polls in-flight txs up to ~24s.
+ */
+export async function verifyCirclePayment(txId: string): Promise<PaymentCheck> {
+  const merchant = (process.env.CIRCLE_MERCHANT_ADDRESS ?? "").toLowerCase();
+  const requiredUsdc = parseFloat(process.env.PAID_PRICE_USDC ?? "0.05");
+  const expectedChain = process.env.PAID_CHAIN ?? "ETH-SEPOLIA";
+  const expectedTokenId = process.env.CIRCLE_USDC_TOKEN_ID; // optional strict-asset check
+
+  if (!merchant) return { ok: false, status: 500, reason: "CIRCLE_MERCHANT_ADDRESS not set" };
+
+  let tx: any = null;
+  for (let i = 0; i < 12; i++) {
+    try {
+      const res = await client.getTransaction({ id: txId });
+      tx = res.data?.transaction ?? null;
+    } catch {
+      return { ok: false, status: 402, reason: "Unknown transaction id" };
+    }
+    if (!tx) return { ok: false, status: 402, reason: "Unknown transaction id" };
+    if (ACCEPTED_STATES.has(tx.state)) break;
+    if (TERMINAL_FAIL.has(tx.state)) return { ok: false, status: 402, reason: `Payment ${tx.state}` };
+    await sleep(2000); // still in-flight (INITIATED/QUEUED/SENT/...)
+  }
+
+  if (!tx || !ACCEPTED_STATES.has(tx.state))
+    return { ok: false, status: 402, reason: "Payment not confirmed in time" };
+  if ((tx.destinationAddress ?? "").toLowerCase() !== merchant)
+    return { ok: false, status: 402, reason: "Wrong merchant address" };
+  if (tx.blockchain && tx.blockchain !== expectedChain)
+    return { ok: false, status: 402, reason: `Wrong chain: ${tx.blockchain}` };
+
+  const paid = parseFloat(tx.amounts?.[0] ?? "0");
+  if (!(paid + 1e-9 >= requiredUsdc))
+    return { ok: false, status: 402, reason: `Underpaid: ${paid} < ${requiredUsdc}` };
+  if (expectedTokenId && tx.tokenId !== expectedTokenId)
+    return { ok: false, status: 402, reason: "Wrong asset (not USDC)" };
+
+  return { ok: true, txHash: tx.txHash ?? "", amount: String(paid), state: tx.state };
+}
+
+// ---- payment rail ----
 export function circleRail(): PaymentRail {
   let walletId = process.env.CIRCLE_WALLET_ID || "";
 
@@ -50,15 +104,30 @@ export function circleRail(): PaymentRail {
       }
       const terms = await challengeRes.json();
 
-      const transferRes = await client.createTransaction({
-        walletId,
-        tokenId: USDC_TOKEN_ID_ETH_SEPOLIA,
-        destinationAddress: terms.payTo,
-        amount: [String(amountUsd)],
-        fee: { type: "level", config: { feeLevel: "MEDIUM" } },
-      });
+      let transferRes;
+      try {
+        transferRes = await client.createTransaction({
+          walletId,
+          tokenId: USDC_TOKEN_ID_ETH_SEPOLIA,
+          destinationAddress: terms.payTo,
+          amount: [String(amountUsd)],
+          fee: { type: "level", config: { feeLevel: "MEDIUM" } },
+        });
+      } catch (e: any) {
+        const reason = e?.response?.data?.message ?? e?.message ?? "transfer rejected";
+        return {
+          rail: "circle",
+          success: false,
+          amountUsd,
+          settlementMs: Math.round(performance.now() - t0),
+          preconditions: [],
+          fraudSignal: null,
+          reversible: false,
+          reference: `transfer-failed: ${reason}`,
+        };
+      }
 
-      const settlementMs = Math.round(performance.now() - t0);
+      const submitMs = Math.round(performance.now() - t0);
       const txId = transferRes.data?.id ?? "unknown";
 
       if (!transferRes.data?.id) {
@@ -66,22 +135,24 @@ export function circleRail(): PaymentRail {
           rail: "circle",
           success: false,
           amountUsd,
-          settlementMs,
+          settlementMs: submitMs,
           preconditions: [],
           fraudSignal: null,
           reversible: false,
-          reference: "transfer-failed",
+          reference: "transfer-failed: no transaction id returned",
         };
       }
 
       const settleRes = await fetch(resourceUrl, { headers: { "X-PAYMENT": txId } });
       const resourceData = settleRes.ok ? await settleRes.json() : null;
+      const confirmMs = Math.round(performance.now() - t0);
 
       return {
         rail: "circle",
         success: settleRes.ok,
         amountUsd,
-        settlementMs,
+        settlementMs: confirmMs, // real time to on-chain confirmation + unlock
+        submitMs,                // time to submit only (tx still INITIATED at this point)
         preconditions: [],
         fraudSignal: null,
         reversible: false,
