@@ -44,7 +44,7 @@ flag.
 
 ## Architecture
 
-![alt text](image.png)
+[alt text](image.png)
 
 - `lib/rails/types.ts` — `PaymentRail` interface (`init`, `pay`) and
   `PaymentResult` type. Designed so additional rails (e.g. Stripe) can
