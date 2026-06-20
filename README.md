@@ -1,4 +1,4 @@
-[paste the above markdown content here]
+
 # Agentic Procurement — Circle x402 Track
 
 An autonomous procurement agent that researches suppliers, decides for itself
